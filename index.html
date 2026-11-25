@@ -1033,6 +1033,21 @@
     return state.users.find(u => String(u.username || "").trim().toLowerCase() === key) || null;
   }
 
+  function isAdminUser(u) {
+    if (!u) return false;
+    return String(u.username || "").toLowerCase() === ADMIN_USER.toLowerCase() || String(u.role || "").includes("總管理員");
+  }
+
+  function isStaffRole(role) {
+    const r = String(role || "");
+    return r.includes("教職員") || r.includes("校長") || r.includes("處室");
+  }
+
+  function isTeacherOrParentRole(role) {
+    const r = String(role || "");
+    return r.includes("老師") || r.includes("導師") || r.includes("家長");
+  }
+
   function enterApp(userObj) {
     state.currentUser = userObj;
     safeStorage.set("math_sys_session_user", JSON.stringify({
@@ -1048,7 +1063,7 @@
     ub.classList.remove("hidden");
     ub.classList.add("flex");
     document.getElementById("header-user-name").textContent = userObj.realName + " (" + userObj.username + ")";
-    document.getElementById("header-user-role").textContent = userObj.username === ADMIN_USER ? "👑 總管理員" : userObj.role;
+    document.getElementById("header-user-role").textContent = isAdminUser(userObj) ? "👑 總管理員" : userObj.role;
     switchTab("course");
     renderDashboard();
   }
@@ -1088,10 +1103,16 @@
       await syncFromCloud(true);
     }
 
-    // 總管理員驗證
-    if (uname === ADMIN_USER) {
-      if (pwd === ADMIN_PASS) {
-        enterApp({ username: ADMIN_USER, realName: "系統總管理員", role: "總管理員", boundUsers: [] });
+    // 總管理員驗證（支援預設密碼與預備&備用帳號內的密碼）
+    if (uname.toLowerCase() === ADMIN_USER.toLowerCase()) {
+      const sheetAdmin = findUser(ADMIN_USER);
+      if (pwd === ADMIN_PASS || (sheetAdmin && String(sheetAdmin.password) === pwd)) {
+        const adminObj = sheetAdmin || { username: ADMIN_USER, realName: "系統總管理員", role: "1.總管理員", boundUsers: [] };
+        if (!isValidPassword(pwd)) {
+          openForcePwdModal(adminObj);
+          return;
+        }
+        enterApp(adminObj);
         showToast("歡迎回來，總管理員！");
         return;
       }
@@ -2160,7 +2181,7 @@
       id: Date.now(),
       username: state.currentUser.username,
       realName: state.currentUser.realName,
-      role: state.currentUser.username === ADMIN_USER ? "總管理員" : state.currentUser.role,
+      role: isAdminUser(state.currentUser) ? "1.總管理員" : state.currentUser.role,
       unit: qState.scopeLabel,
       score: score,
       date: new Date().toLocaleString("zh-TW"),
@@ -2572,7 +2593,7 @@
   function getVisibleScores() {
     const me = state.currentUser;
     if (!me) return [];
-    const isAdmin = me.username === ADMIN_USER;
+    const isAdmin = isAdminUser(me);
     const role = me.role;
 
     return state.scores.filter(sc => {
@@ -2581,12 +2602,13 @@
         return false;
       }
       // 總管理員成績完全隱密僅自己可見
-      if (sc.username === ADMIN_USER && !isAdmin) {
+      const scIsAdmin = String(sc.username || "").toLowerCase() === ADMIN_USER.toLowerCase() || String(sc.role || "").includes("總管理員");
+      if (scIsAdmin && !isAdmin) {
         return false;
       }
       if (isAdmin) return true;
-      if (role === ROLES[0]) return true; // 教職員/人事室/處室/校長看所有非總管成績
-      if (role === ROLES[1] || role === ROLES[2]) {
+      if (isStaffRole(role)) return true; // 教職員/人事室/處室/校長看所有非總管成績
+      if (isTeacherOrParentRole(role)) {
         const myObj = findUser(me.username);
         const bound = (myObj && Array.isArray(myObj.boundUsers)) ? myObj.boundUsers : [];
         return sc.username === me.username || bound.includes(sc.username);
@@ -2598,7 +2620,7 @@
   function renderDashboard() {
     const me = state.currentUser;
     if (!me) return;
-    const isAdmin = me.username === ADMIN_USER;
+    const isAdmin = isAdminUser(me);
 
     document.getElementById("dash-username").textContent = me.username;
     document.getElementById("dash-realname").textContent = me.realName;
@@ -2608,12 +2630,12 @@
     // 權限說明
     const permHint = document.getElementById("score-perm-hint");
     if (isAdmin) permHint.textContent = "總管理員視角：可檢視全體成員（含個人隱密成績），刪除將徹底自雲端移除。";
-    else if (me.role === ROLES[0]) permHint.textContent = "教職員視角：可檢視全校成員成績（不含總管理員），清空名冊時上層仍保留備份。";
-    else if (me.role === ROLES[1] || me.role === ROLES[2]) permHint.textContent = "師長／家長視角：可檢視個人與已綁定學生之數學成績。";
+    else if (isStaffRole(me.role)) permHint.textContent = "教職員視角：可檢視全校成員成績（不含總管理員），清空名冊時上層仍保留備份。";
+    else if (isTeacherOrParentRole(me.role)) permHint.textContent = "師長／家長視角：可檢視個人與已綁定學生之數學成績。";
     else permHint.textContent = "個人視角：僅顯示您自己的數學測驗成績紀錄。";
 
     // 綁定區域
-    const canInvite = isAdmin || me.role === ROLES[0] || me.role === ROLES[1] || me.role === ROLES[2];
+    const canInvite = isAdmin || isStaffRole(me.role) || isTeacherOrParentRole(me.role);
     const invBox = document.getElementById("bind-invite-box");
     invBox.classList.toggle("hidden", !canInvite);
     invBox.classList.toggle("flex", canInvite);
@@ -2727,12 +2749,12 @@
 
   function deleteSingleScore(scoreId) {
     const me = state.currentUser;
-    const isAdmin = me.username === ADMIN_USER;
+    const isAdmin = isAdminUser(me);
     showConfirm(
       isAdmin ? "徹底移除成績紀錄" : "隱藏成績紀錄",
       isAdmin ? "總管理員刪除後將從「數學測驗成績庫」永久移除，確定執行？" : "刪除後將從您的畫面隱藏（上層與總管理員仍保留備份），確定執行？",
       async () => {
-        await postToCloud({ action: "deleteScore", scoreId, username: me.username });
+        await postToCloud({ action: "deleteScore", scoreId, username: me.username, isAdmin });
         if (isAdmin) {
           state.scores = state.scores.filter(s => Number(s.id) !== scoreId);
         } else {
@@ -2753,10 +2775,7 @@
   function openChangePasswordModal() {
     const me = state.currentUser;
     if (!me) return;
-    if (me.username === ADMIN_USER) {
-      showModal("系統提示", "總管理員密碼由系統核心管理，無法於前台直接變更。");
-      return;
-    }
+    
     showModal(
       "🔑 修改登入密碼",
       `<div class="space-y-3">
@@ -2981,12 +3000,12 @@
 
     document.getElementById("btn-clear-scores").addEventListener("click", () => {
       const me = state.currentUser;
-      const isAdmin = me.username === ADMIN_USER;
+      const isAdmin = isAdminUser(me);
       showConfirm(
         isAdmin ? "徹底清空數學測驗成績庫" : "清空個人視角名冊",
         isAdmin ? "總管理員清空後將永久刪除所有數學測驗成績，確定執行？" : "清空後僅從您的視角隱藏，上層與總管理員依然保留備份，確定執行？",
         async () => {
-          await postToCloud({ action: "clearScores", username: me.username });
+          await postToCloud({ action: "clearScores", username: me.username, isAdmin });
           if (isAdmin) {
             state.scores = [];
           } else {
