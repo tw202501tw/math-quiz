@@ -152,7 +152,7 @@
           <h1 class="text-base sm:text-lg font-extrabold tracking-tight text-white truncate">數學智慧選課測驗系統</h1>
           <div class="flex items-center gap-1.5 text-[11px] text-slate-400">
             <span id="cloud-status-dot" class="inline-block w-2 h-2 rounded-full bg-amber-400"></span>
-            <span id="cloud-status-text" class="truncate">本機離線模式</span>
+            <span id="cloud-status-text" class="truncate">雲端自動同步中...</span>
           </div>
         </div>
       </div>
@@ -168,9 +168,7 @@
 
       <!-- 右側工具列 -->
       <div class="flex items-center gap-2 shrink-0">
-        <button type="button" id="btn-cloud-config" class="px-3 py-2 rounded-xl glass-soft text-xs sm:text-sm font-semibold text-cyan-300 hover:text-white hover:border-cyan-400/50 transition flex items-center gap-1.5" title="設定共用的 Google Apps Script 網址">
-          <span>☁️</span><span class="hidden sm:inline">雲端設定</span>
-        </button>
+
         <div id="user-badge-wrap" class="hidden items-center gap-2">
           <div class="hidden lg:flex flex-col items-end leading-tight">
             <span id="header-user-name" class="text-xs font-bold text-white"></span>
@@ -762,7 +760,7 @@
    * 4. 狀態管理
    * ========================================================================= */
   const state = {
-    gasUrl: safeStorage.get("math_sys_gas_url", DEFAULT_GAS_URL) || DEFAULT_GAS_URL,
+    gasUrl: DEFAULT_GAS_URL,
     cloudConnected: false,
     users: [],
     scores: [],
@@ -978,7 +976,7 @@
     const url = (state.gasUrl || "").trim();
     if (!url || !url.startsWith("https://")) {
       loadLocalCache();
-      setCloudBadge(false, "本機離線模式（點擊設定 GAS 網址）");
+      setCloudBadge(false, "雲端連線待命");
       return false;
     }
     try {
@@ -1025,30 +1023,7 @@
     }
   }
 
-  function openCloudConfigModal() {
-    const cur = escapeHtml(state.gasUrl || "");
-    showModal(
-      "☁️ 共用 Google Apps Script 網址設定",
-      `<div class="space-y-3">
-        <p class="text-xs text-slate-300">貼上與「英文智慧選課測驗系統」相同的 GAS 網頁應用程式網址（<code>/exec</code> 結尾），即可共用 <strong>會員帳號庫</strong> 與 <strong>綁定名冊庫</strong>，並將數學成績獨立寫入 <strong>數學測驗成績庫</strong>。</p>
-        <input id="modal-gas-url" type="url" value="${cur}" placeholder="https://script.google.com/macros/s/.../exec" class="w-full px-3.5 py-2.5 rounded-xl glass-input text-xs" />
-        <p class="text-[11px] text-slate-400">若留空則以本機示範模式運行，所有測驗、畫板與圖解功能仍可完整體驗。</p>
-      </div>`,
-      [
-        { text: "取消", primary: false },
-        {
-          text: "儲存並連線測試",
-          primary: true,
-          onClick: async () => {
-            const val = (document.getElementById("modal-gas-url").value || "").trim();
-            state.gasUrl = val;
-            safeStorage.set("math_sys_gas_url", val);
-            await syncFromCloud(false);
-          }
-        }
-      ]
-    );
-  }
+
 
   /* =========================================================================
    * 7. 登入、註冊與強制修改密碼（+++++1）
@@ -2834,7 +2809,7 @@
       btn.classList.toggle("active", btn.dataset.tab === tabName);
     });
     if (tabName === "study") renderStudyHub();
-    if (tabName === "dashboard") renderDashboard();
+    if (tabName === "dashboard") { renderDashboard(); syncFromCloud(true); }
     if (tabName === "fill" && padState.resize) setTimeout(padState.resize, 60);
   }
 
@@ -2844,7 +2819,6 @@
       if (e.target.id === "app-modal") closeModal();
     });
 
-    document.getElementById("btn-cloud-config").addEventListener("click", openCloudConfigModal);
     document.getElementById("btn-logout").addEventListener("click", () => {
       showConfirm("確認登出", "確定要登出目前帳號嗎？", logoutUser);
     });
@@ -3040,6 +3014,18 @@
     bindAllEvents();
     loadLocalCache();
     await syncFromCloud(true);
+
+    // 自動定時與切回視窗時靜默同步雲端資料（每 30 秒）
+    setInterval(() => {
+      if (document.visibilityState === "visible") {
+        syncFromCloud(true);
+      }
+    }, 30000);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") {
+        syncFromCloud(true);
+      }
+    });
 
     // 若已有登入工作階段，自動恢復（仍檢查舊密碼是否合規）
     try {
